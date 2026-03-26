@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Face Attendance System</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header class="header">
+  <div class="header-inner">
+    <div class="logo">
+      <span class="logo-icon">🎓</span>
+      <div>
+        <h1>AI Face Attendance</h1>
+        <p>CVR College of Engineering — CSE Department</p>
+      </div>
+    </div>
+    <div class="header-meta">
+      <span id="clock">--:--:--</span>
+      <span id="date-display">--</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Main layout ── -->
+<main class="container">
+
+  <!-- Left: Camera + Controls -->
+  <section class="panel camera-panel">
+    <h2 class="panel-title">📷 Live Camera Feed</h2>
+
+    <!-- Name input -->
+    <div class="form-row">
+      <label for="student-name">Student Name</label>
+      <input id="student-name" type="text" placeholder="Enter your full name" autocomplete="name" />
+    </div>
+
+    <!-- Video + canvas overlay -->
+    <div class="video-wrapper">
+      <video id="webcam" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="status-badge" class="status-badge idle">IDLE</div>
+    </div>
+
+    <!-- Annotated result from server -->
+    <div class="annotated-wrapper" id="annotated-wrapper" style="display:none">
+      <p class="section-label">YOLOv8 Detection Output</p>
+      <img id="annotated-img" alt="YOLO annotated frame" />
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button id="btn-start" class="btn btn-primary">▶ Start Camera</button>
+      <button id="btn-stop"  class="btn btn-danger"  disabled>■ Stop</button>
+      <button id="btn-snap"  class="btn btn-accent"  disabled>📸 Single Snap</button>
+    </div>
+
+    <!-- Interval setting -->
+    <div class="form-row interval-row">
+      <label for="interval-select">Auto-detect every</label>
+      <select id="interval-select">
+        <option value="3000">3 seconds</option>
+        <option value="5000" selected>5 seconds</option>
+        <option value="10000">10 seconds</option>
+        <option value="30000">30 seconds</option>
+      </select>
+    </div>
+
+    <!-- Live stats bar -->
+    <div class="live-stats">
+      <div class="stat-pill">
+        <span class="stat-label">Status</span>
+        <span id="live-status" class="stat-value">—</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">Faces</span>
+        <span id="live-faces" class="stat-value">—</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">Last check</span>
+        <span id="live-time" class="stat-value">—</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right: Attendance Dashboard -->
+  <section class="panel dashboard-panel">
+    <div class="dashboard-header">
+      <h2 class="panel-title">📋 Today's Attendance</h2>
+      <div class="dash-actions">
+        <button class="btn btn-sm btn-outline" onclick="loadAttendance()">↻ Refresh</button>
+        <a href="/api/export" class="btn btn-sm btn-outline" download>⬇ Export CSV</a>
+      </div>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="summary-cards">
+      <div class="summary-card total">
+        <span class="card-num" id="total-count">0</span>
+        <span class="card-lbl">Total</span>
+      </div>
+      <div class="summary-card present">
+        <span class="card-num" id="present-count">0</span>
+        <span class="card-lbl">Present</span>
+      </div>
+      <div class="summary-card absent">
+        <span class="card-num" id="absent-count">0</span>
+        <span class="card-lbl">Absent</span>
+      </div>
+    </div>
+
+    <!-- Records table -->
+    <div class="table-scroll">
+      <table id="attendance-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Status</th>
+            <th>First Seen</th>
+            <th>Last Seen</th>
+            <th>Detections</th>
+          </tr>
+        </thead>
+        <tbody id="table-body">
+          <tr><td colspan="5" class="empty-msg">No records yet — start monitoring.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Activity log -->
+    <div class="log-section">
+      <h3 class="log-title">🗒 Activity Log</h3>
+      <div id="activity-log" class="log-box"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ── Tech stack footer ── -->
+<footer class="footer">
+  <span>Frontend: HTML · CSS · JS · WebRTC</span>
+  <span>Backend: Python · Flask</span>
+  <span>AI: YOLOv8 (Ultralytics)</span>
+  <span>CV: OpenCV</span>
+  <span>Storage: CSV / Excel</span>
+</footer>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
