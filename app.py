@@ -27,34 +27,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 ATTENDANCE_DIR = "attendance_records"
-CONFIG_FILE = "config.json"
 os.makedirs(ATTENDANCE_DIR, exist_ok=True)
 
-# ── config ────────────────────────────────────────────────────────────────────
-DEFAULT_CONFIG = {
-    "presence_threshold": 0.5   # 0.5 = 50% of call time required for PRESENT
-                                 # Change to 0.75 for 75%, 0.33 for 33%, etc.
-}
-
-def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE) as f:
-                cfg = json.load(f)
-                # Fill in any missing keys with defaults
-                for k, v in DEFAULT_CONFIG.items():
-                    cfg.setdefault(k, v)
-                return cfg
-        except Exception:
-            pass
-    return DEFAULT_CONFIG.copy()
-
-def save_config(cfg: dict):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f, indent=2)
-
-# ── in-memory session store ───────────────────────────────────────────────────
-# Structure: { name: { "face_seconds": float, "call_start": datetime } }
+# ── In-memory session store ───────────────────────────────────────────────────
+# Structure: { name -> { session_duration, face_detected_seconds, session_start, finalized } }
 active_sessions: dict = {}
 
 # ── YOLO model ────────────────────────────────────────────────────────────────
@@ -69,7 +45,7 @@ def get_model():
     return model
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-def decode_frame(data_url: str) -> np.ndarray | None:
+def decode_frame(data_url: str):
     try:
         header, encoded = data_url.split(",", 1)
         img_bytes = base64.b64decode(encoded)
@@ -80,7 +56,8 @@ def decode_frame(data_url: str) -> np.ndarray | None:
         logger.error(f"Frame decode error: {e}")
         return None
 
-def detect_faces(frame: np.ndarray) -> tuple[bool, int, np.ndarray]:
+def detect_faces(frame: np.ndarray):
+    """Run YOLOv8 inference. Returns (face_found, count, annotated_frame)."""
     mdl = get_model()
     results = mdl(frame, verbose=False, conf=0.45, classes=[0])
     count = 0
@@ -118,6 +95,24 @@ def frame_to_data_url(frame: np.ndarray) -> str:
 def today_csv() -> str:
     return os.path.join(ATTENDANCE_DIR, f"attendance_{date.today().isoformat()}.csv")
 
+def append_record(name: str, status: str, face_detected_secs: float, session_duration_secs: float):
+    path = today_csv()
+    write_header = not os.path.exists(path)
+    attendance_pct = round((face_detected_secs / session_duration_secs) * 100, 1) if session_duration_secs > 0 else 0
+    with open(path, "a", newline="") as f:
+        w = csv.writer(f)
+        if write_header:
+            w.writerow(["timestamp", "name", "status", "face_detected_seconds",
+                        "session_duration_seconds", "attendance_percentage"])
+        w.writerow([
+            datetime.now().isoformat(timespec="seconds"),
+            name,
+            status,
+            round(face_detected_secs, 1),
+            round(session_duration_secs, 1),
+            attendance_pct,
+        ])
+
 def load_today_records() -> dict:
     path = today_csv()
     records: dict = {}
@@ -126,37 +121,14 @@ def load_today_records() -> dict:
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             name = row["name"]
-            if name not in records:
-                records[name] = {
-                    "status": row["status"],
-                    "first_seen": row["timestamp"],
-                    "last_seen": row["timestamp"],
-                    "face_seconds": float(row.get("face_seconds", 0)),
-                    "call_duration": float(row.get("call_duration", 0)),
-                    "threshold_used": float(row.get("threshold_used", 0.5)),
-                }
-            else:
-                records[name]["last_seen"] = row["timestamp"]
+            records[name] = {
+                "status": row["status"],
+                "timestamp": row["timestamp"],
+                "face_detected_seconds": float(row.get("face_detected_seconds", 0)),
+                "session_duration_seconds": float(row.get("session_duration_seconds", 0)),
+                "attendance_percentage": float(row.get("attendance_percentage", 0)),
+            }
     return records
-
-def write_final_record(name: str, status: str, face_seconds: float,
-                       call_duration: float, threshold: float):
-    path = today_csv()
-    write_header = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        w = csv.writer(f)
-        if write_header:
-            w.writerow([
-                "timestamp", "name", "status",
-                "face_seconds", "call_duration", "threshold_used"
-            ])
-        w.writerow([
-            datetime.now().isoformat(timespec="seconds"),
-            name, status,
-            round(face_seconds, 1),
-            round(call_duration, 1),
-            threshold,
-        ])
 
 # ── routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -164,23 +136,41 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/session/start", methods=["POST"])
+def session_start():
+    """
+    Start a new attendance session for a student.
+    Body: { "name": "Student Name", "session_duration": 300 }  (seconds)
+    """
+    data = request.get_json(force=True)
+    name = data.get("name", "Unknown").strip() or "Unknown"
+    session_duration = int(data.get("session_duration", 300))  # seconds
+
+    active_sessions[name] = {
+        "session_duration": session_duration,
+        "face_detected_seconds": 0.0,
+        "session_start": datetime.now().isoformat(),
+        "finalized": False,
+        "last_tick_was_face": False,
+    }
+    logger.info(f"Session started for {name} — duration {session_duration}s")
+    return jsonify({"ok": True, "name": name, "session_duration": session_duration})
+
+
 @app.route("/api/detect", methods=["POST"])
 def detect():
     """
-    Receive a WebRTC frame, run YOLO, return detection result + annotated frame.
-    Also accumulates face_seconds in the active session.
-
-    Body JSON:
-    {
+    Receive a WebRTC frame, run YOLO, update session face-time counter.
+    Body JSON: {
         "frame": "<data-url>",
         "name": "Student Name",
-        "face_seconds": 42.5   ← cumulative face time sent from frontend timer
+        "tick_seconds": 2        # how many seconds this tick represents
     }
     """
     data = request.get_json(force=True)
     frame_data = data.get("frame", "")
     name = data.get("name", "Unknown").strip() or "Unknown"
-    face_seconds = float(data.get("face_seconds", 0))
+    tick_seconds = float(data.get("tick_seconds", 2))
 
     frame = decode_frame(frame_data)
     if frame is None:
@@ -189,115 +179,66 @@ def detect():
     face_found, count, annotated = detect_faces(frame)
     status = "PRESENT" if face_found else "ABSENT"
 
-    # Update session store
-    if name not in active_sessions:
-        active_sessions[name] = {
-            "face_seconds": 0,
-            "call_start": datetime.now(),
-        }
-    # Frontend is the authoritative timer; sync it here
-    active_sessions[name]["face_seconds"] = face_seconds
+    # Update session face-time
+    session = active_sessions.get(name)
+    face_detected_seconds = 0.0
+    attendance_pct = 0.0
+    session_duration = 0
+
+    if session and not session["finalized"]:
+        if face_found:
+            session["face_detected_seconds"] += tick_seconds
+        face_detected_seconds = session["face_detected_seconds"]
+        session_duration = session["session_duration"]
+        attendance_pct = (face_detected_seconds / session_duration * 100) if session_duration > 0 else 0
 
     return jsonify({
         "status": status,
         "face_count": count,
         "annotated_frame": frame_to_data_url(annotated),
         "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "face_detected_seconds": round(face_detected_seconds, 1),
+        "session_duration": session_duration,
+        "attendance_percentage": round(attendance_pct, 1),
     })
-
-
-@app.route("/api/session/start", methods=["POST"])
-def session_start():
-    """
-    Call this when the session (class/call) begins for a student.
-    Body JSON: { "name": "Student Name" }
-    """
-    data = request.get_json(force=True)
-    name = data.get("name", "Unknown").strip() or "Unknown"
-    active_sessions[name] = {
-        "face_seconds": 0,
-        "call_start": datetime.now(),
-    }
-    logger.info(f"Session started for: {name}")
-    return jsonify({"message": f"Session started for {name}", "name": name})
 
 
 @app.route("/api/session/end", methods=["POST"])
 def session_end():
     """
-    Call this when the session ends (e.g. teacher ends the class).
-    Calculates final attendance based on threshold.
-
-    Body JSON:
-    {
-        "name": "Student Name",
-        "face_seconds": 312.4,        ← total seconds face was detected
-        "call_duration_seconds": 600  ← total session length in seconds
-    }
-
-    Returns: { "name", "final_status", "face_seconds", "call_duration_seconds",
-                "threshold", "required_seconds", "percentage" }
+    Finalize a session and mark attendance.
+    Body: { "name": "Student Name" }
+    Attendance is PRESENT if face detected >= 75% of session time.
     """
     data = request.get_json(force=True)
     name = data.get("name", "Unknown").strip() or "Unknown"
-    face_seconds = float(data.get("face_seconds", 0))
-    call_duration = float(data.get("call_duration_seconds", 0))
 
-    cfg = load_config()
-    threshold = cfg["presence_threshold"]
+    session = active_sessions.get(name)
+    if not session:
+        return jsonify({"error": "No active session for this student"}), 404
 
-    required_seconds = call_duration * threshold
-    final_status = "PRESENT" if face_seconds >= required_seconds else "ABSENT"
-    percentage = (face_seconds / call_duration * 100) if call_duration > 0 else 0
+    if session["finalized"]:
+        return jsonify({"error": "Session already finalized"}), 400
 
-    # Persist final record
-    write_final_record(name, final_status, face_seconds, call_duration, threshold)
+    session["finalized"] = True
 
-    # Clean up session
-    active_sessions.pop(name, None)
+    face_secs = session["face_detected_seconds"]
+    total_secs = session["session_duration"]
+    pct = (face_secs / total_secs * 100) if total_secs > 0 else 0
+    final_status = "PRESENT" if pct >= 75.0 else "ABSENT"
 
-    logger.info(
-        f"Session ended — {name}: {final_status} "
-        f"({face_seconds:.0f}s / {call_duration:.0f}s, "
-        f"threshold={threshold*100:.0f}%)"
-    )
+    append_record(name, final_status, face_secs, total_secs)
+    del active_sessions[name]
 
+    logger.info(f"Session ended for {name} — {pct:.1f}% face time → {final_status}")
     return jsonify({
         "name": name,
         "final_status": final_status,
-        "face_seconds": round(face_seconds, 1),
-        "call_duration_seconds": round(call_duration, 1),
-        "threshold": threshold,
-        "required_seconds": round(required_seconds, 1),
-        "percentage": round(percentage, 1),
+        "face_detected_seconds": round(face_secs, 1),
+        "session_duration": total_secs,
+        "attendance_percentage": round(pct, 1),
+        "threshold": 75.0,
     })
-
-
-@app.route("/api/config", methods=["GET"])
-def get_config():
-    """Return current attendance config."""
-    return jsonify(load_config())
-
-
-@app.route("/api/config", methods=["POST"])
-def update_config():
-    """
-    Update attendance config settings.
-    Body JSON: { "presence_threshold": 0.75 }
-    presence_threshold must be between 0.0 and 1.0
-    """
-    data = request.get_json(force=True)
-    cfg = load_config()
-
-    if "presence_threshold" in data:
-        val = float(data["presence_threshold"])
-        if not (0.0 < val <= 1.0):
-            return jsonify({"error": "presence_threshold must be between 0.01 and 1.0"}), 400
-        cfg["presence_threshold"] = val
-
-    save_config(cfg)
-    logger.info(f"Config updated: {cfg}")
-    return jsonify({"message": "Config updated", "config": cfg})
 
 
 @app.route("/api/attendance")
@@ -309,7 +250,6 @@ def attendance():
         "present": sum(1 for r in records.values() if r["status"] == "PRESENT"),
         "absent": sum(1 for r in records.values() if r["status"] == "ABSENT"),
         "records": records,
-        "config": load_config(),
     })
 
 

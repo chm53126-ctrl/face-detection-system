@@ -1,211 +1,168 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Face Detection Attendance System</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
-    <style>
-        /* ── Timer display ── */
-        .timer-row {
-            display: flex;
-            gap: 24px;
-            justify-content: center;
-            margin: 14px 0;
-        }
-        .timer-card {
-            background: #1a1a2e;
-            border-radius: 12px;
-            padding: 12px 24px;
-            text-align: center;
-            min-width: 140px;
-            border: 1px solid #2d2d50;
-        }
-        .timer-card .timer-label {
-            font-size: 0.72rem;
-            color: #888;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .timer-card .timer-value {
-            font-size: 2rem;
-            font-weight: 700;
-            font-variant-numeric: tabular-nums;
-            color: #e0e0e0;
-            margin-top: 4px;
-        }
-        .timer-card.face-timer .timer-value { color: #00c864; }
-        .timer-card.call-timer .timer-value { color: #5b9cf6; }
-
-        /* ── Status badge ── */
-        .status-badge {
-            display: inline-block;
-            padding: 6px 18px;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.95rem;
-            margin: 8px 0;
-        }
-        .status-badge.present { background: #00c86422; color: #00c864; border: 1px solid #00c86455; }
-        .status-badge.absent  { background: #e0204022; color: #e02040; border: 1px solid #e0204055; }
-        .status-badge.waiting { background: #88888822; color: #888;    border: 1px solid #88888855; }
-
-        /* ── Settings panel ── */
-        #settings-panel {
-            display: none;
-            background: #1a1a2e;
-            border: 1px solid #2d2d50;
-            border-radius: 12px;
-            padding: 18px 24px;
-            margin: 14px auto;
-            max-width: 380px;
-            text-align: left;
-        }
-        #settings-panel h3 { margin: 0 0 12px; font-size: 1rem; color: #ccc; }
-        #settings-panel label { font-size: 0.85rem; color: #aaa; display: block; margin-bottom: 4px; }
-        #settings-panel input[type=number] {
-            width: 100%; padding: 8px 10px; border-radius: 8px;
-            border: 1px solid #3a3a5c; background: #12122a; color: #e0e0e0;
-            font-size: 1rem; box-sizing: border-box;
-        }
-        #settings-panel .hint { font-size: 0.78rem; color: #666; margin: 6px 0 14px; }
-
-        /* ── Result card ── */
-        #result-panel { margin: 18px auto; max-width: 420px; display: none; }
-        .result-card {
-            border-radius: 14px;
-            padding: 22px 28px;
-            text-align: center;
-            border: 2px solid;
-        }
-        .result-present { border-color: #00c864; background: #00c86410; }
-        .result-absent  { border-color: #e02040; background: #e0204010; }
-        .result-card h2 { margin: 0 0 4px; font-size: 1.3rem; }
-        .result-status {
-            font-size: 2rem; font-weight: 800; letter-spacing: 2px; margin: 8px 0;
-        }
-        .result-present .result-status { color: #00c864; }
-        .result-absent  .result-status { color: #e02040; }
-        .result-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.9rem; }
-        .result-table td { padding: 5px 8px; color: #ccc; }
-        .result-table td:last-child { text-align: right; color: #fff; }
-        .result-bar-wrap {
-            position: relative; height: 10px; background: #2d2d50;
-            border-radius: 5px; margin: 12px 0; overflow: visible;
-        }
-        .result-bar {
-            height: 100%; background: #00c864; border-radius: 5px;
-            transition: width 0.5s;
-        }
-        .result-bar-threshold {
-            position: absolute; top: -4px; bottom: -4px;
-            width: 3px; background: #f5a623; border-radius: 2px;
-            transform: translateX(-50%);
-        }
-        .result-note { font-size: 0.88rem; color: #bbb; margin-top: 10px; }
-
-        /* ── Buttons ── */
-        .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
-        .btn { padding: 10px 22px; border: none; border-radius: 8px; font-size: 0.95rem;
-               font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .btn-primary   { background: #5b9cf6; color: #fff; }
-        .btn-danger    { background: #e02040; color: #fff; }
-        .btn-secondary { background: #2d2d50; color: #ccc; }
-        .btn-success   { background: #00c864; color: #fff; }
-
-        /* ── Video area ── */
-        .video-wrap { position: relative; display: inline-block; }
-        #annotated-frame {
-            max-width: 100%; border-radius: 10px;
-            display: block; margin: 0 auto;
-        }
-        canvas { display: none; }
-
-        /* ── Layout ── */
-        body { background: #0d0d1a; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
-               margin: 0; padding: 0; }
-        .container { max-width: 720px; margin: 0 auto; padding: 24px 16px; text-align: center; }
-        h1 { font-size: 1.6rem; margin-bottom: 4px; }
-        .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 18px; }
-        .input-row { display: flex; gap: 10px; justify-content: center; align-items: center;
-                     margin-bottom: 14px; flex-wrap: wrap; }
-        .input-row input {
-            padding: 9px 14px; border-radius: 8px; border: 1px solid #3a3a5c;
-            background: #12122a; color: #e0e0e0; font-size: 1rem; min-width: 220px;
-        }
-
-        /* ── Attendance table ── */
-        #attendance-summary { margin-top: 8px; color: #ccc; font-size: 0.9rem; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Face Attendance System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
 </head>
 <body>
-<div class="container">
-    <h1>🎓 Face Detection Attendance</h1>
-    <p class="subtitle">CVR College of Engineering — B.Tech CSE-A</p>
 
-    <!-- Name input -->
-    <div class="input-row">
-        <input id="student-name" type="text" placeholder="Enter your name (e.g. Ballu)" autocomplete="off" />
+  <!-- ── HEADER ─────────────────────────────────────────────────── -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">◈</span>
+        <span class="logo-text">FaceAttend<em>AI</em></span>
+      </div>
+      <div class="header-meta">CVR College of Engineering &nbsp;·&nbsp; CSE-A III Year</div>
     </div>
+  </header>
 
-    <!-- Status -->
-    <div>
-        <span id="status-badge" class="status-badge waiting">Waiting…</span>
-    </div>
+  <!-- ── MAIN ───────────────────────────────────────────────────── -->
+  <main class="app-grid">
 
-    <!-- Timers -->
-    <div class="timer-row">
-        <div class="timer-card face-timer">
-            <div class="timer-label">⏱ Face Present</div>
-            <div class="timer-value" id="face-timer">00:00</div>
+    <!-- LEFT COLUMN -->
+    <section class="left-col">
+
+      <!-- Student name -->
+      <div class="card setup-card" id="setupCard">
+        <h2 class="card-title">Student Info</h2>
+        <label class="field-label" for="studentName">Full Name</label>
+        <input id="studentName" class="text-input" type="text"
+               placeholder="e.g. D. Manish" autocomplete="off" />
+
+        <!-- Session Duration Selector -->
+        <label class="field-label mt">Session Duration</label>
+        <div class="session-grid">
+          <button class="session-btn" data-seconds="120">2 min</button>
+          <button class="session-btn" data-seconds="300">5 min</button>
+          <button class="session-btn" data-seconds="600">10 min</button>
+          <button class="session-btn" data-seconds="1800">30 min</button>
         </div>
-        <div class="timer-card call-timer">
-            <div class="timer-label">📞 Call Duration</div>
-            <div class="timer-value" id="call-timer">00:00</div>
+
+        <button id="startBtn" class="cta-btn" disabled>Start Session</button>
+      </div>
+
+      <!-- Session progress (hidden until session starts) -->
+      <div class="card session-card hidden" id="sessionCard">
+        <h2 class="card-title">Live Session</h2>
+
+        <div class="timer-ring-wrap">
+          <svg class="timer-ring" viewBox="0 0 120 120">
+            <circle class="ring-bg" cx="60" cy="60" r="52"/>
+            <circle class="ring-progress" id="ringProgress" cx="60" cy="60" r="52"
+                    stroke-dasharray="326.7" stroke-dashoffset="326.7"/>
+          </svg>
+          <div class="timer-center">
+            <span class="timer-display" id="timerDisplay">00:00</span>
+            <span class="timer-label">remaining</span>
+          </div>
         </div>
-    </div>
 
-    <!-- Video -->
-    <div class="video-wrap">
-        <video id="video" autoplay muted playsinline
-               style="max-width:100%;border-radius:10px;display:block;margin:0 auto;"></video>
-        <img id="annotated-frame" src="" alt="" style="display:none;" />
-        <canvas id="canvas"></canvas>
-    </div>
-
-    <!-- Main controls -->
-    <div class="btn-group" style="margin-top:14px;">
-        <button id="start-btn" class="btn btn-primary">▶ Start Session</button>
-        <button id="end-btn"   class="btn btn-danger"  disabled>⏹ End Session</button>
-        <button id="settings-btn" class="btn btn-secondary">⚙ Settings</button>
-    </div>
-
-    <!-- Settings panel -->
-    <div id="settings-panel">
-        <h3>⚙ Attendance Settings</h3>
-        <label>Presence Threshold (%)</label>
-        <input id="threshold-input" type="number" min="1" max="100" value="50" />
-        <div class="hint">
-            A student needs to have their face detected for this % of the call duration to be marked <strong>PRESENT</strong>.
-            <br/>Example: 50 = half the class time · 75 = three-quarters of class time
+        <!-- Face presence indicator -->
+        <div class="presence-bar-wrap">
+          <div class="presence-label">
+            <span>Face Detected</span>
+            <span id="presencePct">0%</span>
+          </div>
+          <div class="presence-bar">
+            <div class="presence-fill" id="presenceFill"></div>
+            <div class="threshold-marker"></div>
+          </div>
+          <div class="bar-labels">
+            <span>0%</span>
+            <span class="threshold-txt">75% threshold</span>
+            <span>100%</span>
+          </div>
         </div>
-        <button id="save-config-btn" class="btn btn-success" style="width:100%;">💾 Save Setting</button>
-    </div>
 
-    <!-- Result panel (shown after session ends) -->
-    <div id="result-panel"></div>
-
-    <!-- Attendance summary -->
-    <div style="margin-top:24px; border-top:1px solid #2d2d50; padding-top:18px;">
-        <div class="btn-group">
-            <button id="refresh-btn" class="btn btn-secondary">📋 View Today's Attendance</button>
-            <button id="export-btn"  class="btn btn-secondary">⬇ Export CSV</button>
+        <!-- Live face status pill -->
+        <div class="status-pill" id="statusPill">
+          <span class="pill-dot" id="pillDot"></span>
+          <span id="pillText">Waiting…</span>
         </div>
-        <div id="attendance-summary"></div>
-    </div>
-</div>
 
-<script src="/static/js/app.js"></script>
+        <button id="endBtn" class="cta-btn danger">End Session Early</button>
+      </div>
+
+      <!-- Result card (hidden until session ends) -->
+      <div class="card result-card hidden" id="resultCard">
+        <h2 class="card-title">Session Result</h2>
+        <div class="result-badge" id="resultBadge">—</div>
+        <div class="result-stats">
+          <div class="stat">
+            <span class="stat-val" id="resFaceTime">—</span>
+            <span class="stat-key">Face time</span>
+          </div>
+          <div class="stat">
+            <span class="stat-val" id="resSessionTime">—</span>
+            <span class="stat-key">Session</span>
+          </div>
+          <div class="stat">
+            <span class="stat-val" id="resPct">—</span>
+            <span class="stat-key">Attendance</span>
+          </div>
+        </div>
+        <button id="newSessionBtn" class="cta-btn">New Session</button>
+      </div>
+
+    </section>
+
+    <!-- RIGHT COLUMN -->
+    <section class="right-col">
+
+      <!-- Webcam feed -->
+      <div class="card camera-card">
+        <div class="camera-header">
+          <h2 class="card-title">Camera Feed</h2>
+          <span class="rec-dot" id="recDot"></span>
+        </div>
+        <div class="video-wrap">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="overlay" class="overlay-canvas"></canvas>
+          <div class="camera-idle" id="cameraIdle">
+            <span class="idle-icon">⬡</span>
+            <span>Camera starts with session</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attendance table -->
+      <div class="card attendance-card">
+        <div class="att-header">
+          <h2 class="card-title">Today's Attendance</h2>
+          <div class="att-actions">
+            <button id="refreshBtn" class="icon-btn" title="Refresh">↻</button>
+            <button id="exportBtn" class="icon-btn" title="Export CSV">↓ CSV</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="attTable">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Face Time</th>
+                <th>Session</th>
+                <th>%</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="attBody">
+              <tr class="empty-row"><td colspan="6">No records yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="att-summary" id="attSummary"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="/static/js/app.js"></script>
 </body>
 </html>
