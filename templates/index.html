@@ -1,152 +1,210 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Face Attendance System</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Face Detection Attendance System</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <style>
+        /* ── Timer display ── */
+        .timer-row {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin: 14px 0;
+        }
+        .timer-card {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 12px 24px;
+            text-align: center;
+            min-width: 140px;
+            border: 1px solid #2d2d50;
+        }
+        .timer-card .timer-label {
+            font-size: 0.72rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .timer-card .timer-value {
+            font-size: 2rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: #e0e0e0;
+            margin-top: 4px;
+        }
+        .timer-card.face-timer .timer-value { color: #00c864; }
+        .timer-card.call-timer .timer-value { color: #5b9cf6; }
+
+        /* ── Status badge ── */
+        .status-badge {
+            display: inline-block;
+            padding: 6px 18px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin: 8px 0;
+        }
+        .status-badge.present { background: #00c86422; color: #00c864; border: 1px solid #00c86455; }
+        .status-badge.absent  { background: #e0204022; color: #e02040; border: 1px solid #e0204055; }
+        .status-badge.waiting { background: #88888822; color: #888;    border: 1px solid #88888855; }
+
+        /* ── Settings panel ── */
+        #settings-panel {
+            display: none;
+            background: #1a1a2e;
+            border: 1px solid #2d2d50;
+            border-radius: 12px;
+            padding: 18px 24px;
+            margin: 14px auto;
+            max-width: 380px;
+            text-align: left;
+        }
+        #settings-panel h3 { margin: 0 0 12px; font-size: 1rem; color: #ccc; }
+        #settings-panel label { font-size: 0.85rem; color: #aaa; display: block; margin-bottom: 4px; }
+        #settings-panel input[type=number] {
+            width: 100%; padding: 8px 10px; border-radius: 8px;
+            border: 1px solid #3a3a5c; background: #12122a; color: #e0e0e0;
+            font-size: 1rem; box-sizing: border-box;
+        }
+        #settings-panel .hint { font-size: 0.78rem; color: #666; margin: 6px 0 14px; }
+
+        /* ── Result card ── */
+        #result-panel { margin: 18px auto; max-width: 420px; display: none; }
+        .result-card {
+            border-radius: 14px;
+            padding: 22px 28px;
+            text-align: center;
+            border: 2px solid;
+        }
+        .result-present { border-color: #00c864; background: #00c86410; }
+        .result-absent  { border-color: #e02040; background: #e0204010; }
+        .result-card h2 { margin: 0 0 4px; font-size: 1.3rem; }
+        .result-status {
+            font-size: 2rem; font-weight: 800; letter-spacing: 2px; margin: 8px 0;
+        }
+        .result-present .result-status { color: #00c864; }
+        .result-absent  .result-status { color: #e02040; }
+        .result-table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.9rem; }
+        .result-table td { padding: 5px 8px; color: #ccc; }
+        .result-table td:last-child { text-align: right; color: #fff; }
+        .result-bar-wrap {
+            position: relative; height: 10px; background: #2d2d50;
+            border-radius: 5px; margin: 12px 0; overflow: visible;
+        }
+        .result-bar {
+            height: 100%; background: #00c864; border-radius: 5px;
+            transition: width 0.5s;
+        }
+        .result-bar-threshold {
+            position: absolute; top: -4px; bottom: -4px;
+            width: 3px; background: #f5a623; border-radius: 2px;
+            transform: translateX(-50%);
+        }
+        .result-note { font-size: 0.88rem; color: #bbb; margin-top: 10px; }
+
+        /* ── Buttons ── */
+        .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
+        .btn { padding: 10px 22px; border: none; border-radius: 8px; font-size: 0.95rem;
+               font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-primary   { background: #5b9cf6; color: #fff; }
+        .btn-danger    { background: #e02040; color: #fff; }
+        .btn-secondary { background: #2d2d50; color: #ccc; }
+        .btn-success   { background: #00c864; color: #fff; }
+
+        /* ── Video area ── */
+        .video-wrap { position: relative; display: inline-block; }
+        #annotated-frame {
+            max-width: 100%; border-radius: 10px;
+            display: block; margin: 0 auto;
+        }
+        canvas { display: none; }
+
+        /* ── Layout ── */
+        body { background: #0d0d1a; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
+               margin: 0; padding: 0; }
+        .container { max-width: 720px; margin: 0 auto; padding: 24px 16px; text-align: center; }
+        h1 { font-size: 1.6rem; margin-bottom: 4px; }
+        .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 18px; }
+        .input-row { display: flex; gap: 10px; justify-content: center; align-items: center;
+                     margin-bottom: 14px; flex-wrap: wrap; }
+        .input-row input {
+            padding: 9px 14px; border-radius: 8px; border: 1px solid #3a3a5c;
+            background: #12122a; color: #e0e0e0; font-size: 1rem; min-width: 220px;
+        }
+
+        /* ── Attendance table ── */
+        #attendance-summary { margin-top: 8px; color: #ccc; font-size: 0.9rem; }
+    </style>
 </head>
 <body>
-
-<!-- ── Header ── -->
-<header class="header">
-  <div class="header-inner">
-    <div class="logo">
-      <span class="logo-icon">🎓</span>
-      <div>
-        <h1>AI Face Attendance</h1>
-        <p>CVR College of Engineering — CSE Department</p>
-      </div>
-    </div>
-    <div class="header-meta">
-      <span id="clock">--:--:--</span>
-      <span id="date-display">--</span>
-    </div>
-  </div>
-</header>
-
-<!-- ── Main layout ── -->
-<main class="container">
-
-  <!-- Left: Camera + Controls -->
-  <section class="panel camera-panel">
-    <h2 class="panel-title">📷 Live Camera Feed</h2>
+<div class="container">
+    <h1>🎓 Face Detection Attendance</h1>
+    <p class="subtitle">CVR College of Engineering — B.Tech CSE-A</p>
 
     <!-- Name input -->
-    <div class="form-row">
-      <label for="student-name">Student Name</label>
-      <input id="student-name" type="text" placeholder="Enter your full name" autocomplete="name" />
+    <div class="input-row">
+        <input id="student-name" type="text" placeholder="Enter your name (e.g. Ballu)" autocomplete="off" />
     </div>
 
-    <!-- Video + canvas overlay -->
-    <div class="video-wrapper">
-      <video id="webcam" autoplay playsinline muted></video>
-      <canvas id="overlay"></canvas>
-      <div id="status-badge" class="status-badge idle">IDLE</div>
+    <!-- Status -->
+    <div>
+        <span id="status-badge" class="status-badge waiting">Waiting…</span>
     </div>
 
-    <!-- Annotated result from server -->
-    <div class="annotated-wrapper" id="annotated-wrapper" style="display:none">
-      <p class="section-label">YOLOv8 Detection Output</p>
-      <img id="annotated-img" alt="YOLO annotated frame" />
+    <!-- Timers -->
+    <div class="timer-row">
+        <div class="timer-card face-timer">
+            <div class="timer-label">⏱ Face Present</div>
+            <div class="timer-value" id="face-timer">00:00</div>
+        </div>
+        <div class="timer-card call-timer">
+            <div class="timer-label">📞 Call Duration</div>
+            <div class="timer-value" id="call-timer">00:00</div>
+        </div>
     </div>
 
-    <!-- Controls -->
-    <div class="controls">
-      <button id="btn-start" class="btn btn-primary">▶ Start Camera</button>
-      <button id="btn-stop"  class="btn btn-danger"  disabled>■ Stop</button>
-      <button id="btn-snap"  class="btn btn-accent"  disabled>📸 Single Snap</button>
+    <!-- Video -->
+    <div class="video-wrap">
+        <video id="video" autoplay muted playsinline
+               style="max-width:100%;border-radius:10px;display:block;margin:0 auto;"></video>
+        <img id="annotated-frame" src="" alt="" style="display:none;" />
+        <canvas id="canvas"></canvas>
     </div>
 
-    <!-- Interval setting -->
-    <div class="form-row interval-row">
-      <label for="interval-select">Auto-detect every</label>
-      <select id="interval-select">
-        <option value="3000">3 seconds</option>
-        <option value="5000" selected>5 seconds</option>
-        <option value="10000">10 seconds</option>
-        <option value="30000">30 seconds</option>
-      </select>
+    <!-- Main controls -->
+    <div class="btn-group" style="margin-top:14px;">
+        <button id="start-btn" class="btn btn-primary">▶ Start Session</button>
+        <button id="end-btn"   class="btn btn-danger"  disabled>⏹ End Session</button>
+        <button id="settings-btn" class="btn btn-secondary">⚙ Settings</button>
     </div>
 
-    <!-- Live stats bar -->
-    <div class="live-stats">
-      <div class="stat-pill">
-        <span class="stat-label">Status</span>
-        <span id="live-status" class="stat-value">—</span>
-      </div>
-      <div class="stat-pill">
-        <span class="stat-label">Faces</span>
-        <span id="live-faces" class="stat-value">—</span>
-      </div>
-      <div class="stat-pill">
-        <span class="stat-label">Last check</span>
-        <span id="live-time" class="stat-value">—</span>
-      </div>
-    </div>
-  </section>
-
-  <!-- Right: Attendance Dashboard -->
-  <section class="panel dashboard-panel">
-    <div class="dashboard-header">
-      <h2 class="panel-title">📋 Today's Attendance</h2>
-      <div class="dash-actions">
-        <button class="btn btn-sm btn-outline" onclick="loadAttendance()">↻ Refresh</button>
-        <a href="/api/export" class="btn btn-sm btn-outline" download>⬇ Export CSV</a>
-      </div>
+    <!-- Settings panel -->
+    <div id="settings-panel">
+        <h3>⚙ Attendance Settings</h3>
+        <label>Presence Threshold (%)</label>
+        <input id="threshold-input" type="number" min="1" max="100" value="50" />
+        <div class="hint">
+            A student needs to have their face detected for this % of the call duration to be marked <strong>PRESENT</strong>.
+            <br/>Example: 50 = half the class time · 75 = three-quarters of class time
+        </div>
+        <button id="save-config-btn" class="btn btn-success" style="width:100%;">💾 Save Setting</button>
     </div>
 
-    <!-- Summary cards -->
-    <div class="summary-cards">
-      <div class="summary-card total">
-        <span class="card-num" id="total-count">0</span>
-        <span class="card-lbl">Total</span>
-      </div>
-      <div class="summary-card present">
-        <span class="card-num" id="present-count">0</span>
-        <span class="card-lbl">Present</span>
-      </div>
-      <div class="summary-card absent">
-        <span class="card-num" id="absent-count">0</span>
-        <span class="card-lbl">Absent</span>
-      </div>
+    <!-- Result panel (shown after session ends) -->
+    <div id="result-panel"></div>
+
+    <!-- Attendance summary -->
+    <div style="margin-top:24px; border-top:1px solid #2d2d50; padding-top:18px;">
+        <div class="btn-group">
+            <button id="refresh-btn" class="btn btn-secondary">📋 View Today's Attendance</button>
+            <button id="export-btn"  class="btn btn-secondary">⬇ Export CSV</button>
+        </div>
+        <div id="attendance-summary"></div>
     </div>
-
-    <!-- Records table -->
-    <div class="table-scroll">
-      <table id="attendance-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>First Seen</th>
-            <th>Last Seen</th>
-            <th>Detections</th>
-          </tr>
-        </thead>
-        <tbody id="table-body">
-          <tr><td colspan="5" class="empty-msg">No records yet — start monitoring.</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Activity log -->
-    <div class="log-section">
-      <h3 class="log-title">🗒 Activity Log</h3>
-      <div id="activity-log" class="log-box"></div>
-    </div>
-  </section>
-
-</main>
-
-<!-- ── Tech stack footer ── -->
-<footer class="footer">
-  <span>Frontend: HTML · CSS · JS · WebRTC</span>
-  <span>Backend: Python · Flask</span>
-  <span>AI: YOLOv8 (Ultralytics)</span>
-  <span>CV: OpenCV</span>
-  <span>Storage: CSV / Excel</span>
-</footer>
+</div>
 
 <script src="/static/js/app.js"></script>
 </body>

@@ -1,192 +1,308 @@
-/* ============================================================
-   AI Face Attendance System – Frontend (WebRTC + Fetch API)
-   ============================================================ */
+/**
+ * AI Face Detection Attendance System
+ * Frontend JS — WebRTC capture + face-presence timer logic
+ *
+ * Timer behaviour:
+ *   - faceTimer  : counts up only while face IS detected  → pauses on absence
+ *   - callTimer  : counts up from session start → always running
+ *   - On "End Session": sends both values to /api/session/end
+ *                       backend decides PRESENT / ABSENT using threshold
+ */
 
-// ── State ────────────────────────────────────────────────────
-let stream        = null;   // MediaStream
-let detectTimer   = null;   // setInterval handle
-let isDetecting   = false;
+// ── State ─────────────────────────────────────────────────────────────────────
+let stream = null;
+let captureInterval = null;
+let callTimerInterval = null;
+let faceTimerInterval = null;
 
-// ── DOM refs ─────────────────────────────────────────────────
-const video       = document.getElementById("webcam");
-const overlay     = document.getElementById("overlay");
-const statusBadge = document.getElementById("status-badge");
-const annotatedWrapper = document.getElementById("annotated-wrapper");
-const annotatedImg     = document.getElementById("annotated-img");
-const btnStart    = document.getElementById("btn-start");
-const btnStop     = document.getElementById("btn-stop");
-const btnSnap     = document.getElementById("btn-snap");
-const nameInput   = document.getElementById("student-name");
-const intervalSel = document.getElementById("interval-select");
-const liveStatus  = document.getElementById("live-status");
-const liveFaces   = document.getElementById("live-faces");
-const liveTime    = document.getElementById("live-time");
-const activityLog = document.getElementById("activity-log");
+let faceSeconds = 0;       // cumulative face-present seconds (pauses when no face)
+let callSeconds = 0;       // total call duration seconds (always runs during session)
+let faceDetected = false;  // current frame face status
+let sessionActive = false;
 
-// ── Clock ────────────────────────────────────────────────────
-function updateClock() {
-  const now = new Date();
-  document.getElementById("clock").textContent =
-    now.toLocaleTimeString("en-IN", { hour12: false });
-  document.getElementById("date-display").textContent =
-    now.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+const CAPTURE_INTERVAL_MS = 3000;  // how often to send a frame for detection (ms)
+const FACE_TICK_MS = 100;          // face timer tick resolution (ms)
+const CALL_TICK_MS = 1000;         // call timer tick resolution (ms)
+
+// ── DOM refs (filled in DOMContentLoaded) ─────────────────────────────────────
+let video, canvas, ctx, statusBadge, annotatedImg;
+let faceTimerEl, callTimerEl, nameInput, thresholdInput;
+let startBtn, endBtn, settingsBtn, resultPanel;
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function formatTime(totalSeconds) {
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = Math.floor(totalSeconds % 60);
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
-setInterval(updateClock, 1000);
-updateClock();
 
-// ── Camera ───────────────────────────────────────────────────
-btnStart.addEventListener("click", startCamera);
-btnStop.addEventListener("click",  stopCamera);
-btnSnap.addEventListener("click",  () => sendFrame());
+function formatSeconds(sec) {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
 
+// ── Camera ────────────────────────────────────────────────────────────────────
 async function startCamera() {
-  if (!nameInput.value.trim()) {
-    alert("Please enter your name before starting.");
-    nameInput.focus();
-    return;
-  }
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
-    video.srcObject = stream;
-    await video.play();
-
-    btnStart.disabled = true;
-    btnStop.disabled  = false;
-    btnSnap.disabled  = false;
-    setStatus("loading", "STARTING…");
-    logEntry("info", `Camera started for ${nameInput.value.trim()}`);
-
-    // Start periodic detection
-    const interval = parseInt(intervalSel.value, 10);
-    detectTimer = setInterval(sendFrame, interval);
-    sendFrame(); // immediate first frame
-  } catch (err) {
-    alert("Camera access denied or unavailable: " + err.message);
-    console.error(err);
-  }
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+    } catch (err) {
+        alert("Camera access denied: " + err.message);
+    }
 }
 
 function stopCamera() {
-  clearInterval(detectTimer);
-  detectTimer = null;
-
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop());
-    stream = null;
-  }
-  video.srcObject = null;
-
-  btnStart.disabled = false;
-  btnStop.disabled  = true;
-  btnSnap.disabled  = true;
-  setStatus("idle", "IDLE");
-  annotatedWrapper.style.display = "none";
-  logEntry("info", "Camera stopped.");
-  loadAttendance();
+    if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+    }
 }
 
-// ── Capture & detect ─────────────────────────────────────────
-async function sendFrame() {
-  if (!stream || isDetecting) return;
-  isDetecting = true;
-  setStatus("loading", "DETECTING…");
+// ── Session ───────────────────────────────────────────────────────────────────
+async function startSession() {
+    const name = nameInput.value.trim();
+    if (!name) { alert("Please enter your name first."); return; }
 
-  try {
-    // Capture frame from video onto hidden canvas
-    const canvas = document.createElement("canvas");
-    canvas.width  = video.videoWidth  || 640;
-    canvas.height = video.videoHeight || 480;
-    canvas.getContext("2d").drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+    // Reset timers
+    faceSeconds = 0;
+    callSeconds = 0;
+    faceDetected = false;
+    sessionActive = true;
 
-    const resp = await fetch("/api/detect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ frame: dataUrl, name: nameInput.value.trim() || "Unknown" }),
+    updateFaceTimerDisplay();
+    updateCallTimerDisplay();
+    resultPanel.style.display = "none";
+    statusBadge.textContent = "Waiting…";
+    statusBadge.className = "status-badge waiting";
+
+    // Notify backend
+    await fetch("/api/session/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
     });
 
-    if (!resp.ok) throw new Error(`Server error ${resp.status}`);
-    const result = await resp.json();
+    // Start call-duration timer (always ticking)
+    callTimerInterval = setInterval(() => {
+        callSeconds += CALL_TICK_MS / 1000;
+        updateCallTimerDisplay();
+    }, CALL_TICK_MS);
 
-    // Update UI
-    const present = result.status === "PRESENT";
-    setStatus(present ? "present" : "absent", result.status);
-    liveStatus.textContent = result.status;
-    liveStatus.style.color = present ? "var(--green)" : "var(--red)";
-    liveFaces.textContent  = result.face_count;
-    liveTime.textContent   = result.timestamp;
+    // Start face-presence timer (only ticks while faceDetected=true)
+    faceTimerInterval = setInterval(() => {
+        if (faceDetected) {
+            faceSeconds += FACE_TICK_MS / 1000;
+            updateFaceTimerDisplay();
+        }
+    }, FACE_TICK_MS);
 
-    // Show annotated frame
-    annotatedImg.src = result.annotated_frame;
-    annotatedWrapper.style.display = "block";
+    // Start periodic frame capture → detection
+    captureInterval = setInterval(captureAndDetect, CAPTURE_INTERVAL_MS);
+    captureAndDetect(); // immediate first frame
 
-    logEntry(present ? "present" : "absent",
-      `${nameInput.value.trim() || "Unknown"} — ${result.status} (${result.face_count} face(s)) at ${result.timestamp}`);
-
-    loadAttendance();
-  } catch (err) {
-    console.error("Detection error:", err);
-    setStatus("idle", "ERROR");
-    logEntry("info", `Detection error: ${err.message}`);
-  } finally {
-    isDetecting = false;
-  }
+    startBtn.disabled = true;
+    endBtn.disabled = false;
+    nameInput.disabled = true;
 }
 
-// ── Attendance dashboard ──────────────────────────────────────
-async function loadAttendance() {
-  try {
-    const resp = await fetch("/api/attendance");
-    if (!resp.ok) return;
-    const data = await resp.json();
+async function endSession() {
+    if (!sessionActive) return;
+    sessionActive = false;
 
-    document.getElementById("total-count").textContent   = data.total;
-    document.getElementById("present-count").textContent = data.present;
-    document.getElementById("absent-count").textContent  = data.absent;
+    clearInterval(captureInterval);
+    clearInterval(callTimerInterval);
+    clearInterval(faceTimerInterval);
 
-    const tbody = document.getElementById("table-body");
-    if (Object.keys(data.records).length === 0) {
-      tbody.innerHTML = `<tr><td colspan="5" class="empty-msg">No records yet — start monitoring.</td></tr>`;
-      return;
+    const name = nameInput.value.trim();
+
+    try {
+        const res = await fetch("/api/session/end", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                name,
+                face_seconds: faceSeconds,
+                call_duration_seconds: callSeconds,
+            }),
+        });
+        const result = await res.json();
+        showResult(result);
+    } catch (err) {
+        console.error("Session end error:", err);
     }
 
-    tbody.innerHTML = Object.entries(data.records).map(([name, r]) => `
-      <tr>
-        <td>${esc(name)}</td>
-        <td><span class="${r.status === 'PRESENT' ? 'badge-present' : 'badge-absent'}">${r.status}</span></td>
-        <td>${esc(r.first_seen || "—")}</td>
-        <td>${esc(r.last_seen  || "—")}</td>
-        <td>${r.face_count}</td>
-      </tr>
-    `).join("");
-  } catch (err) {
-    console.warn("Attendance load failed:", err);
-  }
+    startBtn.disabled = false;
+    endBtn.disabled = true;
+    nameInput.disabled = false;
+    faceDetected = false;
+    updateStatusBadge(false);
 }
 
-// ── Helpers ───────────────────────────────────────────────────
-function setStatus(cls, text) {
-  statusBadge.className = `status-badge ${cls}`;
-  statusBadge.textContent = text;
+// ── Detection ─────────────────────────────────────────────────────────────────
+async function captureAndDetect() {
+    if (!sessionActive || !stream) return;
+
+    // Draw video frame to canvas
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+
+    const name = nameInput.value.trim() || "Unknown";
+
+    try {
+        const res = await fetch("/api/detect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                frame: dataUrl,
+                name,
+                face_seconds: faceSeconds,
+            }),
+        });
+        const data = await res.json();
+        if (data.error) return;
+
+        faceDetected = data.status === "PRESENT";
+        updateStatusBadge(faceDetected);
+
+        if (data.annotated_frame) {
+            annotatedImg.src = data.annotated_frame;
+        }
+    } catch (err) {
+        console.error("Detection error:", err);
+    }
 }
 
-function logEntry(type, msg) {
-  const entry = document.createElement("div");
-  entry.className = "log-entry";
-  const ts = new Date().toLocaleTimeString("en-IN", { hour12: false });
-  const colorClass = type === "present" ? "log-present" : type === "absent" ? "log-absent" : "";
-  entry.innerHTML = `<span class="log-time">[${ts}]</span> <span class="${colorClass}">${esc(msg)}</span>`;
-  activityLog.prepend(entry);
-  // Keep only last 50 entries
-  while (activityLog.children.length > 50) activityLog.lastChild.remove();
+// ── UI updates ────────────────────────────────────────────────────────────────
+function updateFaceTimerDisplay() {
+    if (faceTimerEl) faceTimerEl.textContent = formatTime(faceSeconds);
 }
 
-function esc(str) {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function updateCallTimerDisplay() {
+    if (callTimerEl) callTimerEl.textContent = formatTime(callSeconds);
 }
 
-// ── Init ──────────────────────────────────────────────────────
-loadAttendance();
-setInterval(loadAttendance, 10000); // auto-refresh every 10 s
-logEntry("info", "System ready. Enter name and start camera.");
+function updateStatusBadge(present) {
+    if (!statusBadge) return;
+    statusBadge.textContent = present ? "Face Detected ✓" : "No Face ✗";
+    statusBadge.className = "status-badge " + (present ? "present" : "absent");
+}
+
+function showResult(result) {
+    resultPanel.style.display = "block";
+
+    const isPresent = result.final_status === "PRESENT";
+    const pct = result.percentage?.toFixed(1) ?? "—";
+    const required = formatSeconds(result.required_seconds ?? 0);
+    const faceTime = formatSeconds(result.face_seconds ?? 0);
+    const callTime = formatSeconds(result.call_duration_seconds ?? 0);
+    const thresholdPct = ((result.threshold ?? 0.5) * 100).toFixed(0);
+
+    resultPanel.innerHTML = `
+        <div class="result-card ${isPresent ? "result-present" : "result-absent"}">
+            <h2>${result.name}</h2>
+            <div class="result-status">${result.final_status}</div>
+            <table class="result-table">
+                <tr><td>Face time</td><td><strong>${faceTime}</strong></td></tr>
+                <tr><td>Call duration</td><td><strong>${callTime}</strong></td></tr>
+                <tr><td>Required (${thresholdPct}%)</td><td><strong>${required}</strong></td></tr>
+                <tr><td>Your presence</td><td><strong>${pct}%</strong></td></tr>
+            </table>
+            <div class="result-bar-wrap">
+                <div class="result-bar" style="width:${Math.min(pct, 100)}%"></div>
+                <div class="result-bar-threshold" style="left:${thresholdPct}%"></div>
+            </div>
+            <p class="result-note">
+                ${isPresent
+                    ? `✅ Marked <strong>PRESENT</strong> — you met the ${thresholdPct}% threshold.`
+                    : `❌ Marked <strong>ABSENT</strong> — face was present for only ${pct}% (needed ${thresholdPct}%).`}
+            </p>
+        </div>
+    `;
+}
+
+// ── Config / Settings ─────────────────────────────────────────────────────────
+async function loadConfig() {
+    try {
+        const res = await fetch("/api/config");
+        const cfg = await res.json();
+        if (thresholdInput) {
+            thresholdInput.value = (cfg.presence_threshold * 100).toFixed(0);
+        }
+    } catch (err) {
+        console.error("Config load error:", err);
+    }
+}
+
+async function saveConfig() {
+    const pct = parseFloat(thresholdInput.value);
+    if (isNaN(pct) || pct <= 0 || pct > 100) {
+        alert("Threshold must be between 1 and 100.");
+        return;
+    }
+    try {
+        const res = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ presence_threshold: pct / 100 }),
+        });
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        alert(`✅ Saved! Attendance threshold set to ${pct}%.`);
+        document.getElementById("settings-panel").style.display = "none";
+    } catch (err) {
+        alert("Failed to save config: " + err.message);
+    }
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+    video       = document.getElementById("video");
+    canvas      = document.getElementById("canvas");
+    ctx         = canvas.getContext("2d");
+    statusBadge = document.getElementById("status-badge");
+    annotatedImg = document.getElementById("annotated-frame");
+    faceTimerEl = document.getElementById("face-timer");
+    callTimerEl = document.getElementById("call-timer");
+    nameInput   = document.getElementById("student-name");
+    thresholdInput = document.getElementById("threshold-input");
+    startBtn    = document.getElementById("start-btn");
+    endBtn      = document.getElementById("end-btn");
+    settingsBtn = document.getElementById("settings-btn");
+    resultPanel = document.getElementById("result-panel");
+
+    startCamera();
+    loadConfig();
+
+    startBtn.addEventListener("click", startSession);
+    endBtn.addEventListener("click", endSession);
+
+    settingsBtn?.addEventListener("click", () => {
+        const panel = document.getElementById("settings-panel");
+        panel.style.display = panel.style.display === "none" ? "block" : "none";
+    });
+
+    document.getElementById("save-config-btn")?.addEventListener("click", saveConfig);
+
+    // Export button
+    document.getElementById("export-btn")?.addEventListener("click", () => {
+        window.location.href = "/api/export";
+    });
+
+    // Attendance summary
+    document.getElementById("refresh-btn")?.addEventListener("click", async () => {
+        const res = await fetch("/api/attendance");
+        const data = await res.json();
+        const el = document.getElementById("attendance-summary");
+        if (!el) return;
+        el.innerHTML = `
+            <p>Date: <strong>${data.date}</strong></p>
+            <p>Present: <strong>${data.present}</strong> / ${data.total}</p>
+            <p>Absent: <strong>${data.absent}</strong></p>
+        `;
+    });
+});
