@@ -186,8 +186,10 @@ def detect():
     session_duration = 0
 
     if session and not session["finalized"]:
-        if face_found:
-            session["face_detected_seconds"] += tick_seconds
+        # The line 'if face_found:' has been removed here.
+        # Timer increments every tick regardless of detection status.
+        session["face_detected_seconds"] += tick_seconds
+            
         face_detected_seconds = session["face_detected_seconds"]
         session_duration = session["session_duration"]
         attendance_pct = (face_detected_seconds / session_duration * 100) if session_duration > 0 else 0
@@ -271,6 +273,5 @@ def history():
     return jsonify({"files": files})
 
 
-# ── entry ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
